@@ -64,6 +64,7 @@ export default function App() {
   const streamRef = useRef<MediaStream | null>(null);
   const translateDebounceTimerRef = useRef<any>(null);
   const lastProcessedTextRef = useRef<string>('');
+  const isTranslatingRef = useRef<boolean>(false);
 
   // Refresh audio devices list
   const refreshDevices = useCallback(async () => {
@@ -88,12 +89,15 @@ export default function App() {
   // Handle Translate Call to Server
   const handleTranslateText = useCallback(
     async (textToTranslate: string) => {
-      if (!textToTranslate.trim() || textToTranslate === lastProcessedTextRef.current) {
+      const trimmed = textToTranslate.trim();
+      if (!trimmed || isTranslatingRef.current) {
         return;
       }
 
-      lastProcessedTextRef.current = textToTranslate;
+      isTranslatingRef.current = true;
+      lastProcessedTextRef.current = trimmed;
       setState('processing');
+      setErrorMsg(null);
 
       try {
         const recentHistoryTexts = history.slice(-3).map((h) => `${h.originalText} => ${h.translatedText}`);
@@ -102,7 +106,7 @@ export default function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            text: textToTranslate,
+            text: trimmed,
             contextHistory: recentHistoryTexts,
           }),
         });
@@ -120,7 +124,7 @@ export default function App() {
         const newItem: TranslationItem = {
           id: `${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
           timestamp: Date.now(),
-          originalText: textToTranslate,
+          originalText: trimmed,
           translatedText: translation,
           isFinal: true,
         };
@@ -171,6 +175,8 @@ export default function App() {
         console.error('Errore traduzione:', err);
         setErrorMsg(err.message || 'Errore di traduzione');
         setState('error');
+      } finally {
+        isTranslatingRef.current = false;
       }
     },
     [history, isListening, settings.enableAutoTts, settings.ttsRate, settings.ttsPitch, settings.selectedVoiceURI, settings.geminiVoiceName, settings.useGeminiTts]
@@ -206,27 +212,16 @@ export default function App() {
 
           if (finalTranscript) {
             setPolishText((prev) => {
-              const newFull = prev ? `${prev} ${finalTranscript}` : finalTranscript;
-              // Trigger translation on finalized phrase
+              const updated = prev ? `${prev} ${finalTranscript}`.trim() : finalTranscript.trim();
               clearTimeout(translateDebounceTimerRef.current);
               translateDebounceTimerRef.current = setTimeout(() => {
-                handleTranslateText(newFull);
-              }, 400);
-              return newFull;
+                handleTranslateText(updated);
+              }, 300);
+              return updated;
             });
             setInterimPolishText('');
           } else if (interimTranscript) {
             setInterimPolishText(interimTranscript);
-            // Debounce trigger on interim pause
-            clearTimeout(translateDebounceTimerRef.current);
-            translateDebounceTimerRef.current = setTimeout(() => {
-              setPolishText((prev) => {
-                const combined = prev ? `${prev} ${interimTranscript}` : interimTranscript;
-                handleTranslateText(combined);
-                return combined;
-              });
-              setInterimPolishText('');
-            }, 1200);
           }
         };
 
@@ -444,6 +439,8 @@ export default function App() {
           onToggleMute={handleToggleMute}
           onClearTexts={handleClearTexts}
           onRepeatItalianSpeech={handleRepeatItalianSpeech}
+          onPolishTextChange={(text) => setPolishText(text)}
+          onManualTranslate={(text) => handleTranslateText(text)}
           errorMsg={errorMsg}
         />
       </main>
