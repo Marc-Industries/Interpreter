@@ -10,6 +10,7 @@ import {
   enableBackgroundStandbyProtection,
   disableBackgroundStandbyProtection,
   speakItalianText,
+  primeSpeechSynthesis,
   stopSpeechSynthesis,
   blobToBase64,
 } from './utils/audioUtils';
@@ -65,6 +66,7 @@ export default function App() {
   const translateDebounceTimerRef = useRef<any>(null);
   const lastProcessedTextRef = useRef<string>('');
   const isTranslatingRef = useRef<boolean>(false);
+  const isListeningRef = useRef<boolean>(false);
 
   // Refresh audio devices list
   const refreshDevices = useCallback(async () => {
@@ -90,9 +92,10 @@ export default function App() {
   const handleTranslateText = useCallback(
     async (textToTranslate: string) => {
       const trimmed = textToTranslate.trim();
-      if (!trimmed || isTranslatingRef.current) {
-        return;
-      }
+      if (!trimmed) return;
+
+      // Avoid repeating exact same translation in rapid succession if already speaking
+      if (trimmed === lastProcessedTextRef.current && isTranslatingRef.current) return;
 
       isTranslatingRef.current = true;
       lastProcessedTextRef.current = trimmed;
@@ -150,7 +153,10 @@ export default function App() {
               if (ttsData.success && ttsData.audioBase64) {
                 const audio = new Audio(`data:audio/wav;base64,${ttsData.audioBase64}`);
                 audio.playbackRate = settings.ttsRate;
-                audio.onended = () => setState(isListening ? 'listening' : 'idle');
+                audio.onended = () => {
+                  if (isListeningRef.current) setState('listening');
+                  else setState('idle');
+                };
                 audio.play();
                 return;
               }
@@ -166,10 +172,13 @@ export default function App() {
             settings.ttsPitch,
             settings.selectedVoiceURI,
             () => setState('speaking'),
-            () => setState(isListening ? 'listening' : 'idle')
+            () => {
+              if (isListeningRef.current) setState('listening');
+              else setState('idle');
+            }
           );
         } else {
-          setState(isListening ? 'listening' : 'idle');
+          setState(isListeningRef.current ? 'listening' : 'idle');
         }
       } catch (err: any) {
         console.error('Errore traduzione:', err);
@@ -179,83 +188,8 @@ export default function App() {
         isTranslatingRef.current = false;
       }
     },
-    [history, isListening, settings.enableAutoTts, settings.ttsRate, settings.ttsPitch, settings.selectedVoiceURI, settings.geminiVoiceName, settings.useGeminiTts]
+    [history, settings.enableAutoTts, settings.ttsRate, settings.ttsPitch, settings.selectedVoiceURI, settings.geminiVoiceName, settings.useGeminiTts]
   );
-
-  // Setup Web Speech Recognition for Polish
-  const startSpeechRecognition = useCallback(() => {
-    const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-    if (SpeechRecognitionClass) {
-      try {
-        if (recognitionRef.current) {
-          recognitionRef.current.stop();
-        }
-
-        const recognition = new SpeechRecognitionClass();
-        recognition.lang = 'pl-PL';
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.maxAlternatives = 1;
-
-        recognition.onresult = (event: any) => {
-          let finalTranscript = '';
-          let interimTranscript = '';
-
-          for (let i = event.resultIndex; i < event.results.length; ++i) {
-            if (event.results[i].isFinal) {
-              finalTranscript += event.results[i][0].transcript;
-            } else {
-              interimTranscript += event.results[i][0].transcript;
-            }
-          }
-
-          if (finalTranscript) {
-            setPolishText((prev) => {
-              const updated = prev ? `${prev} ${finalTranscript}`.trim() : finalTranscript.trim();
-              clearTimeout(translateDebounceTimerRef.current);
-              translateDebounceTimerRef.current = setTimeout(() => {
-                handleTranslateText(updated);
-              }, 300);
-              return updated;
-            });
-            setInterimPolishText('');
-          } else if (interimTranscript) {
-            setInterimPolishText(interimTranscript);
-          }
-        };
-
-        recognition.onerror = (event: any) => {
-          console.warn('SpeechRecognition warning:', event.error);
-          if (event.error === 'no-speech') return;
-          if (event.error === 'not-allowed') {
-            setErrorMsg('Permesso microfono negato.');
-            setIsListening(false);
-          }
-        };
-
-        recognition.onend = () => {
-          // Restart continuously if still listening
-          if (isListening) {
-            try {
-              recognition.start();
-            } catch {
-              // Ignore if already active
-            }
-          }
-        };
-
-        recognition.start();
-        recognitionRef.current = recognition;
-        return;
-      } catch (err) {
-        console.warn('Inizializzazione SpeechRecognition fallita:', err);
-      }
-    }
-
-    // Fallback: Web Audio MediaRecorder streaming chunk to server
-    setupMediaRecorderFallback();
-  }, [handleTranslateText, isListening]);
 
   // Audio Visualizer setup
   const setupAudioAnalyzer = useCallback((stream: MediaStream) => {
@@ -288,9 +222,10 @@ export default function App() {
     }
   }, []);
 
-  // MediaRecorder Fallback when Web Speech API isn't present
-  const setupMediaRecorderFallback = useCallback(async () => {
+  // Continuous Speech & Audio Listener setup
+  const startAudioListening = useCallback(async () => {
     try {
+      // 1. Obtain Microphone Stream for Hardware Filters & Audio Level Visualizer
       const constraints: MediaStreamConstraints = {
         audio: {
           echoCancellation: settings.echoCancellation,
@@ -304,60 +239,142 @@ export default function App() {
       streamRef.current = stream;
       setupAudioAnalyzer(stream);
 
-      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
-      mediaRecorderRef.current = recorder;
+      // 2. Setup Web Speech Recognition
+      const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-      recorder.ondataavailable = async (e) => {
-        if (e.data.size > 0 && isListening) {
-          const base64 = await blobToBase64(e.data);
-          setState('processing');
-
-          try {
-            const res = await fetch('/api/translate', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                audioBase64: base64,
-                mimeType: 'audio/webm;codecs=opus',
-              }),
-            });
-            const data = await res.json();
-            if (data.success && data.translation) {
-              setItalianText(data.translation);
-              if (settings.enableAutoTts) {
-                speakItalianText(data.translation, settings.ttsRate);
-              }
-            }
-          } catch (err) {
-            console.error('Errore audio chunk translation:', err);
-          } finally {
-            setState('listening');
-          }
+      if (SpeechRecognitionClass) {
+        if (recognitionRef.current) {
+          try { recognitionRef.current.stop(); } catch {}
         }
-      };
 
-      recorder.start(4000); // Record in 4-second continuous windows
+        const recognition = new SpeechRecognitionClass();
+        recognition.lang = 'pl-PL';
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.maxAlternatives = 1;
+
+        recognition.onresult = (event: any) => {
+          let finalTranscript = '';
+          let interimTranscript = '';
+
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+              finalTranscript += event.results[i][0].transcript;
+            } else {
+              interimTranscript += event.results[i][0].transcript;
+            }
+          }
+
+          if (finalTranscript) {
+            setPolishText((prev) => {
+              const updated = prev ? `${prev} ${finalTranscript}`.trim() : finalTranscript.trim();
+              clearTimeout(translateDebounceTimerRef.current);
+              translateDebounceTimerRef.current = setTimeout(() => {
+                handleTranslateText(updated);
+              }, 300);
+              return updated;
+            });
+            setInterimPolishText('');
+          } else if (interimTranscript) {
+            setInterimPolishText(interimTranscript);
+            // Auto-translate on pause in interim speech
+            clearTimeout(translateDebounceTimerRef.current);
+            translateDebounceTimerRef.current = setTimeout(() => {
+              setPolishText((prev) => {
+                const combined = prev ? `${prev} ${interimTranscript}`.trim() : interimTranscript.trim();
+                if (combined) {
+                  handleTranslateText(combined);
+                }
+                return combined;
+              });
+              setInterimPolishText('');
+            }, 1000);
+          }
+        };
+
+        recognition.onerror = (event: any) => {
+          console.warn('SpeechRecognition warning:', event.error);
+          if (event.error === 'not-allowed') {
+            setErrorMsg('Permesso microfono negato nel browser.');
+            isListeningRef.current = false;
+            setIsListening(false);
+            setState('idle');
+          }
+        };
+
+        recognition.onend = () => {
+          // Standard continuous restart if listening is still active
+          if (isListeningRef.current && recognitionRef.current) {
+            try {
+              recognitionRef.current.start();
+            } catch {
+              // Already running or stopped intentionally
+            }
+          }
+        };
+
+        recognition.start();
+        recognitionRef.current = recognition;
+      } else {
+        // Fallback: MediaRecorder chunking
+        const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+        mediaRecorderRef.current = recorder;
+
+        recorder.ondataavailable = async (e) => {
+          if (e.data.size > 0 && isListeningRef.current) {
+            const base64 = await blobToBase64(e.data);
+            setState('processing');
+
+            try {
+              const res = await fetch('/api/translate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  audioBase64: base64,
+                  mimeType: 'audio/webm;codecs=opus',
+                }),
+              });
+              const data = await res.json();
+              if (data.success && data.translation) {
+                setItalianText(data.translation);
+                if (settings.enableAutoTts) {
+                  speakItalianText(data.translation, settings.ttsRate, settings.ttsPitch, settings.selectedVoiceURI);
+                }
+              }
+            } catch (err) {
+              console.error('Errore audio chunk translation:', err);
+            } finally {
+              if (isListeningRef.current) setState('listening');
+            }
+          }
+        };
+
+        recorder.start(4000);
+      }
     } catch (err) {
       console.error('Impossibile accedere al microfono:', err);
-      setErrorMsg('Impossibile accedere al microfono. Controllare i permessi del browser.');
+      setErrorMsg('Impossibile accedere al microfono. Verifica i permessi del browser.');
+      isListeningRef.current = false;
       setIsListening(false);
+      setState('idle');
     }
-  }, [settings, setupAudioAnalyzer, isListening]);
+  }, [handleTranslateText, settings, setupAudioAnalyzer]);
 
   // Toggle Listening Session
   const handleToggleListening = () => {
-    if (isListening) {
+    if (isListeningRef.current) {
       // STOP
+      isListeningRef.current = false;
       setIsListening(false);
       setState('idle');
       disableBackgroundStandbyProtection();
 
       if (recognitionRef.current) {
-        recognitionRef.current.stop();
+        try { recognitionRef.current.stop(); } catch {}
         recognitionRef.current = null;
       }
       if (mediaRecorderRef.current) {
-        mediaRecorderRef.current.stop();
+        try { mediaRecorderRef.current.stop(); } catch {}
         mediaRecorderRef.current = null;
       }
       if (streamRef.current) {
@@ -371,11 +388,13 @@ export default function App() {
       stopSpeechSynthesis();
     } else {
       // START
+      isListeningRef.current = true;
       setIsListening(true);
       setState('listening');
       setErrorMsg(null);
+      primeSpeechSynthesis();
       enableBackgroundStandbyProtection();
-      startSpeechRecognition();
+      startAudioListening();
     }
   };
 
@@ -440,7 +459,6 @@ export default function App() {
           onClearTexts={handleClearTexts}
           onRepeatItalianSpeech={handleRepeatItalianSpeech}
           onPolishTextChange={(text) => setPolishText(text)}
-          onManualTranslate={(text) => handleTranslateText(text)}
           errorMsg={errorMsg}
         />
       </main>

@@ -16,7 +16,6 @@ interface TranslationViewProps {
   onClearTexts: () => void;
   onRepeatItalianSpeech: () => void;
   onPolishTextChange: (text: string) => void;
-  onManualTranslate: (text: string) => void;
   errorMsg: string | null;
 }
 
@@ -34,7 +33,6 @@ export const TranslationView: React.FC<TranslationViewProps> = ({
   onClearTexts,
   onRepeatItalianSpeech,
   onPolishTextChange,
-  onManualTranslate,
   errorMsg,
 }) => {
   const [copiedPolish, setCopiedPolish] = React.useState(false);
@@ -53,16 +51,6 @@ export const TranslationView: React.FC<TranslationViewProps> = ({
       navigator.clipboard.writeText(italianText);
       setCopiedItalian(true);
       setTimeout(() => setCopiedItalian(false), 2000);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      const currentText = polishText + (interimPolishText ? ' ' + interimPolishText : '');
-      if (currentText.trim()) {
-        onManualTranslate(currentText);
-      }
     }
   };
 
@@ -101,7 +89,7 @@ export const TranslationView: React.FC<TranslationViewProps> = ({
       {/* BENTO GRID CONTAINER */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-4 flex-1">
 
-        {/* BENTO TILE 1: POLISH SOURCE TEXT / INTERACTIVE INPUT */}
+        {/* BENTO TILE 1: POLISH SOURCE TEXT */}
         <div className="md:col-span-8 glass-card p-6 flex flex-col justify-between min-h-[240px] transition-all relative">
           <div className="flex justify-between items-start mb-2 border-b border-zinc-800/80 pb-2">
             <div className="flex items-center gap-2">
@@ -114,11 +102,18 @@ export const TranslationView: React.FC<TranslationViewProps> = ({
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="text-xs text-zinc-500 mono">
-                {isListening ? `Mic Vol: ${audioLevel}%` : 'Scrivi o parla'}
+              <span className="text-xs text-zinc-500 mono flex items-center gap-1.5">
+                {isListening ? (
+                  <>
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>Mic: {audioLevel}%</span>
+                  </>
+                ) : (
+                  'Microfono inattivo'
+                )}
               </span>
               {polishText && (
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1 ml-2">
                   <button
                     onClick={handleCopyPolish}
                     className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
@@ -138,41 +133,30 @@ export const TranslationView: React.FC<TranslationViewProps> = ({
             </div>
           </div>
 
-          {/* Interactive Textarea & Live Interim Preview */}
+          {/* Source Text View & Live Transcription Stream */}
           <div className="flex-1 my-2 relative flex flex-col">
             <textarea
               value={polishText}
               onChange={(e) => onPolishTextChange(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Scrivi qui in polacco o premi AVVIA per parlare con il microfono... (Invio per tradurre)"
+              placeholder="Inizia a parlare in polacco dopo aver premuto AVVIA... La trascrizione e traduzione avverranno in automatico."
               className="w-full flex-1 bg-transparent text-xl md:text-2xl font-medium leading-relaxed text-zinc-100 placeholder:text-zinc-600 focus:outline-none resize-none min-h-[120px] max-h-[220px]"
             />
             {interimPolishText && (
-              <div className="text-emerald-400/90 italic text-base md:text-lg animate-pulse font-mono mt-1">
-                🗣️ {interimPolishText}...
+              <div className="text-emerald-400/90 italic text-base md:text-lg animate-pulse font-mono mt-1 flex items-center gap-1.5">
+                <span>🗣️</span>
+                <span>{interimPolishText}...</span>
               </div>
             )}
           </div>
 
-          <div className="flex items-center justify-between pt-3 border-t border-zinc-800/60 text-[11px] text-zinc-500 mono gap-2">
-            <div className="flex items-center gap-2">
-              <span>{polishText ? `${polishText.trim().split(/\s+/).length} parole` : 'Pronto all\'input'}</span>
-              <span className="text-zinc-600">|</span>
-              <span className="text-zinc-400">Premi Invio per tradurre</span>
-            </div>
-
-            <button
-              onClick={() => {
-                const textToSubmit = polishText + (interimPolishText ? ' ' + interimPolishText : '');
-                if (textToSubmit.trim()) {
-                  onManualTranslate(textToSubmit);
-                }
-              }}
-              disabled={!polishText.trim() && !interimPolishText.trim()}
-              className="px-4 py-1.5 rounded-xl bg-emerald-500 text-zinc-950 font-bold text-xs hover:bg-emerald-400 disabled:opacity-40 disabled:pointer-events-none transition-all flex items-center gap-1.5 shadow-md shrink-0"
-            >
-              TRADUCI ORA ➔
-            </button>
+          <div className="flex items-center justify-between pt-3 border-t border-zinc-800/60 text-[11px] text-zinc-500 mono">
+            <span>{polishText ? `${polishText.trim().split(/\s+/).length} parole trascritte` : 'In attesa di parlato polacco'}</span>
+            {isListening && (
+              <span className="flex items-center gap-1.5 text-emerald-400 font-semibold">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                AUTOMATICO ATTIVO
+              </span>
+            )}
           </div>
         </div>
 

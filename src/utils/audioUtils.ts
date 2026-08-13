@@ -165,6 +165,21 @@ export function getAvailableItalianVoices(): SpeechSynthesisVoice[] {
   });
 }
 
+// Prime / Unlock Speech Synthesis on user interaction
+export function primeSpeechSynthesis() {
+  if ('speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.resume();
+      const u = new SpeechSynthesisUtterance(' ');
+      u.volume = 0.01;
+      u.rate = 2.0;
+      window.speechSynthesis.speak(u);
+    } catch (e) {
+      console.warn('Impossibile preparare sintesi vocale:', e);
+    }
+  }
+}
+
 export function speakItalianText(
   text: string,
   rate: number = 1.0,
@@ -178,8 +193,15 @@ export function speakItalianText(
     return;
   }
 
-  // CRITICAL: Clean playback queue if previous translation becomes stale to prevent cumulative backlog
-  window.speechSynthesis.cancel();
+  // Ensure speech synthesis is resumed if paused by browser
+  if (window.speechSynthesis.paused) {
+    window.speechSynthesis.resume();
+  }
+
+  // Cancel any currently playing speech safely
+  if (window.speechSynthesis.speaking) {
+    window.speechSynthesis.cancel();
+  }
 
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = 'it-IT';
@@ -224,7 +246,19 @@ export function speakItalianText(
   };
 
   currentSpeechUtterance = utterance;
-  window.speechSynthesis.speak(utterance);
+
+  // Use a slight timeout to prevent Chrome/Android race conditions when calling speak after cancel
+  setTimeout(() => {
+    try {
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+      }
+      window.speechSynthesis.speak(utterance);
+    } catch (err) {
+      console.warn('Errore riproduzione speak:', err);
+      if (onEnd) onEnd();
+    }
+  }, 50);
 }
 
 export function stopSpeechSynthesis() {
