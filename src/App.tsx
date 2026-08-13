@@ -182,8 +182,18 @@ export default function App() {
         }
       } catch (err: any) {
         console.error('Errore traduzione:', err);
-        setErrorMsg(err.message || 'Errore di traduzione');
+        const errMsg = err.message || 'Errore di traduzione';
+        setErrorMsg(errMsg);
         setState('error');
+        // Auto-clear transient error banner and resume listening state after 4 seconds
+        setTimeout(() => {
+          if (isListeningRef.current) {
+            setState('listening');
+            setErrorMsg(null);
+          } else {
+            setState('idle');
+          }
+        }, 4000);
       } finally {
         isTranslatingRef.current = false;
       }

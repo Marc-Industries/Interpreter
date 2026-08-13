@@ -41,6 +41,49 @@ REGOLAMENTO E COMPORTAMENTO DELL'IA:
 3. ROBUSTEZZA AL RUMORE:
    - Se una parte del discorso è del tutto incomprensibile a causa del rumore di fondo o sovrapposizioni vocali, tralasciala e riprendi immediatamente dal primo blocco comprensibile senza bloccarti.`;
 
+// Helper function for robust Gemini generation with retry and model fallback
+async function generateWithFallback(
+  ai: GoogleGenAI,
+  contents: any,
+  systemInstruction?: string,
+  temperature: number = 0.2
+) {
+  const modelsToTry = ["gemini-3.6-flash", "gemini-3.1-flash-lite"];
+  let lastError: any = null;
+
+  for (const model of modelsToTry) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+        config: {
+          systemInstruction,
+          temperature,
+        },
+      });
+      return response;
+    } catch (err: any) {
+      lastError = err;
+      const isQuotaOrRateLimit =
+        err?.status === 429 ||
+        err?.message?.includes("429") ||
+        err?.message?.includes("RESOURCE_EXHAUSTED") ||
+        err?.message?.includes("Quota exceeded");
+
+      if (isQuotaOrRateLimit) {
+        console.warn(`[Gemini API] Quota/429 per ${model}, tento il modello di riserva...`);
+        // Wait 800ms before trying the fallback model
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        continue;
+      }
+      // If it's a different fatal error, break immediately
+      throw err;
+    }
+  }
+
+  throw lastError;
+}
+
 // REST Endpoint: Healthcheck
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", service: "Interprete PL-IT Live" });
@@ -76,14 +119,12 @@ app.post("/api/translate", async (req, res) => {
       parts.push({ text: `Testo polacco da tradurre: "${text}"` });
     }
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: { parts },
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        temperature: 0.2,
-      }
-    });
+    const response = await generateWithFallback(
+      ai,
+      { parts },
+      SYSTEM_INSTRUCTION,
+      0.2
+    );
 
     const translatedText = response.text ? response.text.trim() : "";
     
@@ -96,7 +137,14 @@ app.post("/api/translate", async (req, res) => {
   } catch (err: any) {
     console.error("Errore nella traduzione Gemini:", err);
     let errorMsg = err.message || "Errore del server durante la traduzione.";
-    if (errorMsg.includes("401") || errorMsg.includes("API key") || errorMsg.includes("UNAUTHENTICATED")) {
+    if (
+      err?.status === 429 ||
+      errorMsg.includes("429") ||
+      errorMsg.includes("RESOURCE_EXHAUSTED") ||
+      errorMsg.includes("Quota exceeded")
+    ) {
+      errorMsg = "Quota o limite di richieste Gemini superato (20 richieste/min). Attendi qualche secondo per la richiesta successiva.";
+    } else if (errorMsg.includes("401") || errorMsg.includes("API key") || errorMsg.includes("UNAUTHENTICATED")) {
       errorMsg = "Chiave API Gemini (GEMINI_API_KEY) non valida o non autorizzata (401). Verifica i Segreti.";
     }
     return res.status(200).json({ success: false, error: errorMsg });
@@ -129,15 +177,22 @@ app.post("/api/tts", async (req, res) => {
     if (audioData) {
       return res.json({ success: true, audioBase64: audioData, sampleRate: 24000 });
     } else {
-      return res.status(200).json({ success: false, error: "Sintesi vocale non generata." });
+      return res.status(200).json({ success: false, fallbackToLocal: true, error: "Sintesi vocale non generata." });
     }
   } catch (err: any) {
     console.error("Errore TTS Gemini:", err);
     let errorMsg = err.message || "Errore nella generazione audio TTS.";
-    if (errorMsg.includes("401") || errorMsg.includes("API key")) {
+    if (
+      err?.status === 429 ||
+      errorMsg.includes("429") ||
+      errorMsg.includes("RESOURCE_EXHAUSTED") ||
+      errorMsg.includes("Quota exceeded")
+    ) {
+      errorMsg = "Quota TTS Gemini superata, passaggio automatico alla voce di sistema.";
+    } else if (errorMsg.includes("401") || errorMsg.includes("API key")) {
       errorMsg = "Chiave API Gemini non autorizzata per la sintesi vocale.";
     }
-    return res.status(200).json({ success: false, error: errorMsg });
+    return res.status(200).json({ success: false, fallbackToLocal: true, error: errorMsg });
   }
 });
 
@@ -160,14 +215,12 @@ async function startServer() {
 
         if (type === "translate_text") {
           const ai = getGeminiClient();
-          const response = await ai.models.generateContent({
-            model: "gemini-3.6-flash",
-            contents: `Traduci dal polacco all'italiano: "${text}"`,
-            config: {
-              systemInstruction: SYSTEM_INSTRUCTION,
-              temperature: 0.2
-            }
-          });
+          const response = await generateWithFallback(
+            ai,
+            `Traduci dal polacco all'italiano: "${text}"`,
+            SYSTEM_INSTRUCTION,
+            0.2
+          );
 
           const translation = response.text ? response.text.trim() : "";
           if (ws.readyState === WebSocket.OPEN) {
@@ -181,19 +234,17 @@ async function startServer() {
           }
         } else if (type === "translate_audio") {
           const ai = getGeminiClient();
-          const response = await ai.models.generateContent({
-            model: "gemini-3.6-flash",
-            contents: {
+          const response = await generateWithFallback(
+            ai,
+            {
               parts: [
                 { inlineData: { mimeType: mimeType || "audio/pcm;rate=16000", data: audioBase64 } },
                 { text: "Traduci l'audio parlato polacco in testo italiano." }
               ]
             },
-            config: {
-              systemInstruction: SYSTEM_INSTRUCTION,
-              temperature: 0.2
-            }
-          });
+            SYSTEM_INSTRUCTION,
+            0.2
+          );
 
           const translation = response.text ? response.text.trim() : "";
           if (ws.readyState === WebSocket.OPEN) {
