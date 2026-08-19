@@ -87,6 +87,7 @@ export default function App() {
   const analyzerRef = useRef<AnalyserNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const translateDebounceTimerRef = useRef<any>(null);
+  const mediaIntervalRef = useRef<any>(null);
   const lastProcessedTextRef = useRef<string>('');
   const isTranslatingRef = useRef<boolean>(false);
   const isListeningRef = useRef<boolean>(false);
@@ -96,6 +97,15 @@ export default function App() {
   const accumulatedSourceRef = useRef<string>('');
   const audioQueueRef = useRef<{ audio: HTMLAudioElement; onEnd: () => void }[]>([]);
   const isPlayingAudioRef = useRef<boolean>(false);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (mediaIntervalRef.current) {
+        clearInterval(mediaIntervalRef.current);
+      }
+    };
+  }, []);
 
   const enqueueGeminiAudio = useCallback((audio: HTMLAudioElement, onEnd: () => void) => {
     const playNext = () => {
@@ -332,8 +342,8 @@ export default function App() {
       streamRef.current = stream;
       setupAudioAnalyzer(stream);
 
-      // 2. Setup Web Speech Recognition
-      const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
+      // 2. Setup Web Speech Recognition (Disabled in preview to force Gemini Audio API)
+      const SpeechRecognitionClass = null; // window.SpeechRecognition || window.webkitSpeechRecognition;
 
       if (SpeechRecognitionClass) {
         if (recognitionRef.current) {
@@ -444,11 +454,19 @@ export default function App() {
               console.error('Errore audio chunk translation:', err);
             } finally {
               if (isListeningRef.current) setState('listening');
+              if (isListeningRef.current && recorder.state === 'inactive') {
+                try { recorder.start(); } catch {}
+              }
             }
           }
         };
 
-        recorder.start(4000);
+        recorder.start();
+        mediaIntervalRef.current = setInterval(() => {
+          if (isListeningRef.current && recorder.state === 'recording') {
+            recorder.stop();
+          }
+        }, 4000);
       }
     } catch (err: any) {
       console.error('Impossibile accedere al microfono:', err);
@@ -487,6 +505,10 @@ export default function App() {
       if (mediaRecorderRef.current) {
         try { mediaRecorderRef.current.stop(); } catch {}
         mediaRecorderRef.current = null;
+      }
+      if (mediaIntervalRef.current) {
+        clearInterval(mediaIntervalRef.current);
+        mediaIntervalRef.current = null;
       }
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
