@@ -1,5 +1,5 @@
 {
-  "name": "Interprete PL-IT",
+  "name": "VoxLink",
   "description": "PWA Mobile-First per Traduzione Simultanea e Continua Speech-to-Speech da Polacco a Italiano per auricolari Bluetooth",
   "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

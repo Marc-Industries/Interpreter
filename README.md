@@ -1,10 +1,10 @@
-# 🎙️ Interprete PL-IT (Real-Time Voice Translator)
+# 🎙️ VoxLink (Real-Time Voice Translator)
 
 Una Progressive Web App (PWA) mobile-first progettata per la traduzione simultanea e continua **Speech-to-Speech** e **Speech-to-Text**, originariamente ottimizzata per le lingue Polacco 🇵🇱 e Italiano 🇮🇹, ma adattabile ad altre lingue. 
 
 Costruita con **React**, **Node.js/Express**, e alimentata dall'intelligenza artificiale di **Google Gemini API**, questa applicazione è ideale per conversazioni dal vivo utilizzando auricolari Bluetooth.
 
-![App Preview](https://placehold.co/800x400/18181b/ffffff?text=Interprete+PL-IT+PWA)
+![App Preview](https://placehold.co/800x400/18181b/ffffff?text=VoxLink+PWA)
 
 ## ✨ Funzionalità Principali
 
