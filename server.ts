@@ -10,10 +10,10 @@ const app = express();
 app.use(express.json({ limit: "25mb" }));
 
 // Server-side Gemini Client
-function getGeminiClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
+function getGeminiClient(reqApiKey?: string): GoogleGenAI {
+  const apiKey = reqApiKey || process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
-    throw new Error("GEMINI_API_KEY non configurata. Imposta la chiave API nei Segreti di AI Studio.");
+    throw new Error("API Key Gemini non configurata. Inserisci la tua chiave API nelle impostazioni.");
   }
   return new GoogleGenAI({
     apiKey,
@@ -25,18 +25,18 @@ function getGeminiClient(): GoogleGenAI {
   });
 }
 
-const SYSTEM_INSTRUCTION = `Agisci come un interprete simultaneo professionista e altamente adattivo. Il tuo compito è convertire uno stream continuo in lingua Polacca in lingua Italiana.
+const getSystemInstruction = (sourceLang: string = 'Polacca', targetLang: string = 'Italiana') => `Agisci come un interprete simultaneo professionista e altamente adattivo. Il tuo compito è convertire uno stream continuo in lingua ${sourceLang} in lingua ${targetLang}.
 
 REGOLAMENTO E COMPORTAMENTO DELL'IA:
 1. GESTIONE DEL PARLATO INFORMALE E NON SCANDITO:
    - L'audio o testo in ingresso proviene da una conversazione reale, veloce, informale e spesso biascicata o con pronuncia non scandita.
    - NON cercare di tradurre parola per parola. Usa il CONTESTO complessivo della frase o del discorso per ricostruire le parole pronunciate male, troncate o mangiate.
-   - Ignora gli intercalari irrilevanti, le esitazioni, i colpi di tosse o i rumori di fondo (es. "yymm", "eee", "no", "kurde", "ehm"). Traduci solo il significato logico e compiuto.
-   - Traduci mantenendo un registro italiano naturale, colloquiale e fluido, coerente con il tono originale dei parlanti.
+   - Ignora gli intercalari irrilevanti, le esitazioni, i colpi di tosse o i rumori di fondo. Traduci solo il significato logico e compiuto.
+   - Traduci mantenendo un registro naturale, colloquiale e fluido, coerente con il tono originale dei parlanti.
 
 2. FLUSSO CONTINUO E LATENZA ZERO:
    - Mantieni la latenza al minimo assoluto. Traduci non appena un'unità di senso (frase o sotto-frase) è completa.
-   - La tua risposta deve contenere ESCLUSIVAMENTE la traduzione italiana. NON aggiungere commenti, NON fare domande, NON inserire preamboli (es. NON scrivere "Ha detto che...", "Traduzione:").
+   - La tua risposta deve contenere ESCLUSIVAMENTE la traduzione in lingua ${targetLang}. NON aggiungere commenti, NON fare domande, NON inserire preamboli.
 
 3. ROBUSTEZZA AL RUMORE:
    - Se una parte del discorso è del tutto incomprensibile a causa del rumore di fondo o sovrapposizioni vocali, tralasciala e riprendi immediatamente dal primo blocco comprensibile senza bloccarti.`;
@@ -86,18 +86,21 @@ async function generateWithFallback(
 
 // REST Endpoint: Healthcheck
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", service: "Interprete PL-IT Live" });
+  res.json({ status: "ok", service: "Interprete Live" });
 });
 
 // REST Endpoint: Text or Audio chunk translation
 app.post("/api/translate", async (req, res) => {
   try {
-    const { text, audioBase64, mimeType, contextHistory } = req.body;
+    const { text, audioBase64, mimeType, contextHistory, sourceLang, targetLang } = req.body;
+    const reqApiKey = req.headers["x-gemini-api-key"] as string | undefined;
+
     if (!text && !audioBase64) {
       return res.status(400).json({ error: "Fornire testo o audio in ingresso." });
     }
 
-    const ai = getGeminiClient();
+    const ai = getGeminiClient(reqApiKey);
+    const systemInstruction = getSystemInstruction(sourceLang, targetLang);
     
     // Construct contents
     const parts: any[] = [];
@@ -114,15 +117,15 @@ app.post("/api/translate", async (req, res) => {
           data: audioBase64
         }
       });
-      parts.push({ text: "Traduci l'audio polacco in italiano secondo le istruzioni di sistema." });
+      parts.push({ text: `Traduci l'audio parlato in ${targetLang} secondo le istruzioni di sistema.` });
     } else {
-      parts.push({ text: `Testo polacco da tradurre: "${text}"` });
+      parts.push({ text: `Testo da tradurre: "${text}"` });
     }
 
     const response = await generateWithFallback(
       ai,
       { parts },
-      SYSTEM_INSTRUCTION,
+      systemInstruction,
       0.2
     );
 
@@ -145,7 +148,7 @@ app.post("/api/translate", async (req, res) => {
     ) {
       errorMsg = "Quota o limite di richieste Gemini superato (20 richieste/min). Attendi qualche secondo per la richiesta successiva.";
     } else if (errorMsg.includes("401") || errorMsg.includes("API key") || errorMsg.includes("UNAUTHENTICATED")) {
-      errorMsg = "Chiave API Gemini (GEMINI_API_KEY) non valida o non autorizzata (401). Verifica i Segreti.";
+      errorMsg = "Chiave API Gemini non valida o non autorizzata (401). Verifica la chiave nelle impostazioni.";
     }
     return res.status(200).json({ success: false, error: errorMsg });
   }
@@ -155,14 +158,16 @@ app.post("/api/translate", async (req, res) => {
 app.post("/api/tts", async (req, res) => {
   try {
     const { text, voiceName = "Aoede" } = req.body;
+    const reqApiKey = req.headers["x-gemini-api-key"] as string | undefined;
+
     if (!text) {
       return res.status(400).json({ error: "Testo mancante per TTS" });
     }
 
-    const ai = getGeminiClient();
+    const ai = getGeminiClient(reqApiKey);
     const response = await ai.models.generateContent({
       model: "gemini-3.1-flash-tts-preview",
-      contents: [{ parts: [{ text: `Leggi in modo caldo, fluido, chiaro e morbido in italiano: ${text}` }] }],
+      contents: [{ parts: [{ text: `Leggi in modo caldo, fluido, chiaro e morbido: ${text}` }] }],
       config: {
         responseModalities: ["AUDIO"],
         speechConfig: {
@@ -205,6 +210,7 @@ async function startServer() {
   wss.on("connection", (ws: WebSocket) => {
     console.log("✈️ Client connesso a WebSocket di traduzione live");
     let sessionActive = true;
+    let liveSession: any = null;
 
     ws.on("message", async (data: Buffer | string) => {
       if (!sessionActive) return;
@@ -213,12 +219,77 @@ async function startServer() {
         const payload = JSON.parse(data.toString());
         const { type, text, audioBase64, mimeType, id } = payload;
 
-        if (type === "translate_text") {
+        if (type === "start_live_session") {
+          try {
+            const ai = getGeminiClient();
+            liveSession = await (ai.live as any).connect({
+              model: "gemini-2.0-flash-exp",
+              config: {
+                responseModalities: ["TEXT", "AUDIO"],
+                systemInstruction: { parts: [{ text: getSystemInstruction() }] },
+                generationConfig: {
+                  temperature: 0.2,
+                  speechConfig: {
+                    voiceConfig: { prebuiltVoiceConfig: { voiceName: "Aoede" } }
+                  }
+                }
+              }
+            });
+
+            // Receive stream loop from Gemini Live
+            (async () => {
+              try {
+                for await (const message of liveSession.receive()) {
+                  if (!sessionActive || ws.readyState !== WebSocket.OPEN) break;
+                  if (message.serverContent) {
+                    const parts = message.serverContent.modelTurn?.parts;
+                    if (parts) {
+                      for (const part of parts) {
+                        if (part.text) {
+                          ws.send(JSON.stringify({ type: "live_text", text: part.text }));
+                        }
+                        if (part.inlineData) {
+                          ws.send(JSON.stringify({ type: "live_audio", audioBase64: part.inlineData.data }));
+                        }
+                      }
+                    }
+                  }
+                }
+              } catch (e) {
+                console.warn("Stream Gemini Live disconnesso:", e);
+              }
+            })();
+
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "live_session_started", mode: "live_gemini" }));
+            }
+          } catch (err: any) {
+            console.warn("Gemini Live non disponibile, modalità rapida attiva:", err?.message);
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "live_session_started", mode: "standard_ws_fallback" }));
+            }
+          }
+        } else if (type === "audio_chunk" && liveSession) {
+          try {
+            await liveSession.send({
+              realtimeInput: {
+                mediaChunks: [
+                  {
+                    mimeType: mimeType || "audio/pcm;rate=16000",
+                    data: audioBase64
+                  }
+                ]
+              }
+            });
+          } catch (err) {
+            console.warn("Errore invio audio a Gemini Live:", err);
+          }
+        } else if (type === "translate_text") {
           const ai = getGeminiClient();
           const response = await generateWithFallback(
             ai,
-            `Traduci dal polacco all'italiano: "${text}"`,
-            SYSTEM_INSTRUCTION,
+            `Traduci: "${text}"`,
+            getSystemInstruction(),
             0.2
           );
 
@@ -239,10 +310,10 @@ async function startServer() {
             {
               parts: [
                 { inlineData: { mimeType: mimeType || "audio/pcm;rate=16000", data: audioBase64 } },
-                { text: "Traduci l'audio parlato polacco in testo italiano." }
+                { text: "Traduci l'audio parlato in testo." }
               ]
             },
-            SYSTEM_INSTRUCTION,
+            getSystemInstruction(),
             0.2
           );
 
@@ -269,8 +340,15 @@ async function startServer() {
       }
     });
 
+    ws.on("error", (err) => {
+      console.warn("⚠️ Avviso connessione WebSocket (disconnessione o errore di rete):", err.message);
+    });
+
     ws.on("close", () => {
       sessionActive = false;
+      if (liveSession) {
+        try { liveSession.close(); } catch {}
+      }
       console.log("🔌 Client disconnesso da WebSocket traduzione");
     });
   });

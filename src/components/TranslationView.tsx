@@ -1,56 +1,66 @@
 import React from 'react';
-import { Mic, MicOff, Volume2, Copy, Trash2, Check } from 'lucide-react';
-import { TranslationState } from '../types';
+import { Mic, MicOff, Volume2, Copy, Trash2, Check, FileText, VolumeX } from 'lucide-react';
+import { TranslationState, LanguageOption } from '../types';
 
 interface TranslationViewProps {
   isListening: boolean;
   state: TranslationState;
-  polishText: string;
-  interimPolishText: string;
-  italianText: string;
+  sourceLang: LanguageOption;
+  targetLang: LanguageOption;
+  sourceText: string;
+  interimSourceText: string;
+  targetText: string;
   audioLevel: number;
   isMuted: boolean;
   ttsRate: number;
+  enableAutoTts: boolean;
+  onToggleAutoTts: () => void;
   onToggleListening: () => void;
   onToggleMute: () => void;
   onClearTexts: () => void;
-  onRepeatItalianSpeech: () => void;
-  onPolishTextChange: (text: string) => void;
+  onRepeatTargetSpeech: () => void;
+  onSourceTextChange: (text: string) => void;
+  onRequestMicPermission?: () => void;
   errorMsg: string | null;
 }
 
 export const TranslationView: React.FC<TranslationViewProps> = ({
   isListening,
   state,
-  polishText,
-  interimPolishText,
-  italianText,
+  sourceLang,
+  targetLang,
+  sourceText,
+  interimSourceText,
+  targetText,
   audioLevel,
   isMuted,
   ttsRate,
+  enableAutoTts,
+  onToggleAutoTts,
   onToggleListening,
   onToggleMute,
   onClearTexts,
-  onRepeatItalianSpeech,
-  onPolishTextChange,
+  onRepeatTargetSpeech,
+  onSourceTextChange,
+  onRequestMicPermission,
   errorMsg,
 }) => {
-  const [copiedPolish, setCopiedPolish] = React.useState(false);
-  const [copiedItalian, setCopiedItalian] = React.useState(false);
+  const [copiedSource, setCopiedSource] = React.useState(false);
+  const [copiedTarget, setCopiedTarget] = React.useState(false);
 
-  const handleCopyPolish = () => {
-    if (polishText) {
-      navigator.clipboard.writeText(polishText);
-      setCopiedPolish(true);
-      setTimeout(() => setCopiedPolish(false), 2000);
+  const handleCopySource = () => {
+    if (sourceText) {
+      navigator.clipboard.writeText(sourceText);
+      setCopiedSource(true);
+      setTimeout(() => setCopiedSource(false), 2000);
     }
   };
 
-  const handleCopyItalian = () => {
-    if (italianText) {
-      navigator.clipboard.writeText(italianText);
-      setCopiedItalian(true);
-      setTimeout(() => setCopiedItalian(false), 2000);
+  const handleCopyTarget = () => {
+    if (targetText) {
+      navigator.clipboard.writeText(targetText);
+      setCopiedTarget(true);
+      setTimeout(() => setCopiedTarget(false), 2000);
     }
   };
 
@@ -75,14 +85,25 @@ export const TranslationView: React.FC<TranslationViewProps> = ({
     <div className="w-full max-w-6xl mx-auto p-4 md:p-6 flex-1 flex flex-col gap-4">
       {/* ERROR ALERT */}
       {errorMsg && (
-        <div className="glass-card p-4 border-rose-500/50 bg-rose-950/40 text-rose-200 text-xs flex items-center justify-between gap-3 shadow-lg animate-in fade-in">
-          <span className="mono">{errorMsg}</span>
-          <button 
-            onClick={onClearTexts} 
-            className="text-rose-400 hover:text-rose-200 text-xs font-mono underline shrink-0"
-          >
-            DISMISS
-          </button>
+        <div className="glass-card p-4 border-rose-500/50 bg-rose-950/40 text-rose-200 text-xs flex flex-wrap items-center justify-between gap-3 shadow-lg animate-in fade-in">
+          <span className="mono font-medium">{errorMsg}</span>
+          <div className="flex items-center gap-2.5">
+            {onRequestMicPermission && (errorMsg.toLowerCase().includes('microfono') || errorMsg.toLowerCase().includes('permess')) && (
+              <button
+                type="button"
+                onClick={onRequestMicPermission}
+                className="px-3 py-1.5 rounded-lg bg-rose-500 hover:bg-rose-400 text-zinc-950 font-bold font-mono text-[11px] uppercase transition-all shadow-md active:scale-95"
+              >
+                Sblocca Microfono 🎙️
+              </button>
+            )}
+            <button 
+              onClick={onClearTexts} 
+              className="text-rose-400 hover:text-rose-200 text-xs font-mono underline shrink-0 px-1"
+            >
+              CHIUDI
+            </button>
+          </div>
         </div>
       )}
 
@@ -94,10 +115,10 @@ export const TranslationView: React.FC<TranslationViewProps> = ({
           <div className="flex justify-between items-start mb-2 border-b border-zinc-800/80 pb-2">
             <div className="flex items-center gap-2">
               <span className="px-2 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-[10px] font-mono text-zinc-300 font-bold">
-                PL
+                {sourceLang?.code?.split('-')?.[0]?.toUpperCase() || 'PL'}
               </span>
               <span className="text-[10px] uppercase tracking-widest text-zinc-400 font-bold">
-                TESTO O PARLATO · POLACCO
+                TESTO O PARLATO · {sourceLang?.name?.toUpperCase() || 'POLACCO'}
               </span>
             </div>
 
@@ -112,14 +133,14 @@ export const TranslationView: React.FC<TranslationViewProps> = ({
                   'Microfono inattivo'
                 )}
               </span>
-              {polishText && (
+              {sourceText && (
                 <div className="flex items-center gap-1 ml-2">
                   <button
-                    onClick={handleCopyPolish}
+                    onClick={handleCopySource}
                     className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
-                    title="Copia testo polacco"
+                    title={`Copia testo in ${sourceLang?.name || 'originale'}`}
                   >
-                    {copiedPolish ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedSource ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                   </button>
                   <button
                     onClick={onClearTexts}
@@ -136,21 +157,21 @@ export const TranslationView: React.FC<TranslationViewProps> = ({
           {/* Source Text View & Live Transcription Stream */}
           <div className="flex-1 my-2 relative flex flex-col">
             <textarea
-              value={polishText}
-              onChange={(e) => onPolishTextChange(e.target.value)}
-              placeholder="Inizia a parlare in polacco dopo aver premuto AVVIA... La trascrizione e traduzione avverranno in automatico."
+              value={sourceText}
+              onChange={(e) => onSourceTextChange(e.target.value)}
+              placeholder={`Inizia a parlare in ${sourceLang?.name || 'originale'} dopo aver premuto AVVIA... La trascrizione e traduzione avverranno in automatico.`}
               className="w-full flex-1 bg-transparent text-xl md:text-2xl font-medium leading-relaxed text-zinc-100 placeholder:text-zinc-600 focus:outline-none resize-none min-h-[120px] max-h-[220px]"
             />
-            {interimPolishText && (
+            {interimSourceText && (
               <div className="text-emerald-400/90 italic text-base md:text-lg animate-pulse font-mono mt-1 flex items-center gap-1.5">
                 <span>🗣️</span>
-                <span>{interimPolishText}...</span>
+                <span>{interimSourceText}...</span>
               </div>
             )}
           </div>
 
           <div className="flex items-center justify-between pt-3 border-t border-zinc-800/60 text-[11px] text-zinc-500 mono">
-            <span>{polishText ? `${polishText.trim().split(/\s+/).length} parole trascritte` : 'In attesa di parlato polacco'}</span>
+            <span>{sourceText ? `${sourceText.trim().split(/\s+/).length} parole trascritte` : `In attesa di parlato in ${sourceLang?.name || 'originale'}`}</span>
             {isListening && (
               <span className="flex items-center gap-1.5 text-emerald-400 font-semibold">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
@@ -212,30 +233,62 @@ export const TranslationView: React.FC<TranslationViewProps> = ({
             </p>
           </div>
 
-          {/* Quick Controls */}
-          <div className="w-full flex items-center justify-between gap-2 pt-3 border-t border-zinc-800/80">
-            <button
-              onClick={onToggleMute}
-              className={`flex-1 py-2 px-3 rounded-xl text-xs font-mono border transition-colors flex items-center justify-center gap-1.5 ${
-                isMuted
-                  ? 'bg-rose-950/60 border-rose-800 text-rose-300'
-                  : 'bg-zinc-800/80 border-zinc-700 text-zinc-300 hover:text-white'
-              }`}
-            >
-              {isMuted ? <MicOff className="w-3.5 h-3.5 text-rose-400" /> : <Mic className="w-3.5 h-3.5 text-emerald-400" />}
-              <span>{isMuted ? 'MUTO' : 'MIC ATTIVO'}</span>
-            </button>
-
-            {italianText && (
+          {/* Quick Controls & Output Mode Selector */}
+          <div className="w-full flex flex-col gap-2 pt-3 border-t border-zinc-800/80">
+            {/* Output Mode Switcher */}
+            <div className="flex rounded-xl bg-zinc-900/90 p-1 border border-zinc-800 gap-1 w-full">
               <button
-                onClick={onRepeatItalianSpeech}
-                className="py-2 px-3 rounded-xl bg-zinc-800/80 border border-zinc-700 text-emerald-400 hover:bg-zinc-700 text-xs font-mono flex items-center justify-center gap-1"
-                title="Riascolta traduzione"
+                type="button"
+                onClick={onToggleAutoTts}
+                className={`flex-1 py-1.5 px-2 rounded-lg text-[11px] font-mono font-semibold transition-all flex items-center justify-center gap-1.5 ${
+                  !enableAutoTts
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+                title="Sottotitoli a schermo (nessun disturbo audio)"
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>SOTTOTITOLI</span>
+              </button>
+              <button
+                type="button"
+                onClick={onToggleAutoTts}
+                className={`flex-1 py-1.5 px-2 rounded-lg text-[11px] font-mono font-semibold transition-all flex items-center justify-center gap-1.5 ${
+                  enableAutoTts
+                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+                title="Lettura vocale automatica con sintesi"
               >
                 <Volume2 className="w-3.5 h-3.5" />
-                <span>SPEECH</span>
+                <span>VOCE TTS</span>
               </button>
-            )}
+            </div>
+
+            <div className="flex items-center justify-between gap-2">
+              <button
+                onClick={onToggleMute}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs font-mono border transition-colors flex items-center justify-center gap-1.5 ${
+                  isMuted
+                    ? 'bg-rose-950/60 border-rose-800 text-rose-300'
+                    : 'bg-zinc-800/80 border-zinc-700 text-zinc-300 hover:text-white'
+                }`}
+              >
+                {isMuted ? <MicOff className="w-3.5 h-3.5 text-rose-400" /> : <Mic className="w-3.5 h-3.5 text-emerald-400" />}
+                <span>{isMuted ? 'MUTO' : 'MIC ATTIVO'}</span>
+              </button>
+
+              {targetText && (
+                <button
+                  onClick={onRepeatTargetSpeech}
+                  className="py-2 px-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20 text-xs font-mono flex items-center justify-center gap-1"
+                  title="Ascolta traduzione ora"
+                >
+                  <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>ASCOLTA</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -244,38 +297,51 @@ export const TranslationView: React.FC<TranslationViewProps> = ({
           <div className="flex justify-between items-start mb-3 border-b border-emerald-500/20 pb-2">
             <div className="flex items-center gap-2">
               <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-500/40 text-[10px] font-mono text-emerald-300 font-bold">
-                IT
+                {targetLang?.code?.split('-')?.[0]?.toUpperCase() || 'IT'}
               </span>
               <span className="text-[10px] uppercase tracking-widest text-emerald-400 font-bold">
-                TARGET · ITALIANO
+                TARGET · {targetLang?.name?.toUpperCase() || 'ITALIANO'}
+              </span>
+              <span className={`ml-2 px-2 py-0.5 rounded-md text-[10px] font-mono border ${
+                !enableAutoTts
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                  : 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300'
+              }`}>
+                {!enableAutoTts ? '💬 MODALITÀ SOTTOTITOLI' : '🔊 LETTURA VOCALE'}
               </span>
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="text-xs text-emerald-400 mono uppercase font-semibold">
-                {italianText ? 'Traduzione Disponibile' : 'In Corso'}
-              </span>
-              {italianText && (
-                <button
-                  onClick={handleCopyItalian}
-                  className="p-1.5 rounded-lg text-emerald-300 hover:text-white hover:bg-emerald-950/60 transition-colors"
-                  title="Copia traduzione italiana"
-                >
-                  {copiedItalian ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                </button>
+              {targetText && (
+                <>
+                  <button
+                    onClick={onRepeatTargetSpeech}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30 text-xs font-mono flex items-center gap-1.5 transition-colors"
+                  >
+                    <Volume2 className="w-3.5 h-3.5" />
+                    <span>ASCOLTA</span>
+                  </button>
+                  <button
+                    onClick={handleCopyTarget}
+                    className="p-1.5 rounded-lg text-emerald-300 hover:text-white hover:bg-emerald-950/60 transition-colors"
+                    title={`Copia traduzione in ${targetLang?.name || 'italiano'}`}
+                  >
+                    {copiedTarget ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
+                </>
               )}
             </div>
           </div>
 
           {/* Main Output Text */}
           <div className="flex-1 my-2 text-2xl md:text-3xl lg:text-4xl font-semibold leading-relaxed md:leading-tight text-white overflow-y-auto max-h-[240px] pr-1">
-            {italianText ? (
+            {targetText ? (
               <p className="whitespace-pre-wrap break-words">
-                {italianText}
+                {targetText}
               </p>
             ) : (
               <p className="text-zinc-500 italic text-base md:text-xl font-normal flex items-center h-full">
-                &ldquo;La traduzione in italiano comparirà qui in tempo reale con sintesi vocale...&rdquo;
+                &ldquo;{enableAutoTts ? 'La traduzione comparirà qui con sintesi vocale...' : 'La traduzione comparirà qui in modalità sottotitoli senza disturbi audio...'}&rdquo;
               </p>
             )}
           </div>

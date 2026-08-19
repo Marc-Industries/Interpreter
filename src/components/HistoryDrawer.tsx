@@ -1,7 +1,7 @@
 import React from 'react';
 import { X, Volume2, Download, Trash2, History as HistoryIcon, Search, Copy, Check } from 'lucide-react';
 import { TranslationItem } from '../types';
-import { speakItalianText } from '../utils/audioUtils';
+import { speakTargetText } from '../utils/audioUtils';
 
 interface HistoryDrawerProps {
   isOpen: boolean;
@@ -131,7 +131,7 @@ export const HistoryDrawer: React.FC<HistoryDrawerProps> = ({
                   </span>
                   <div className="flex items-center gap-1">
                     <button
-                      onClick={() => speakItalianText(item.translatedText, ttsRate, ttsPitch, selectedVoiceURI)}
+                      onClick={() => speakTargetText(item.translatedText, ttsRate, ttsPitch, selectedVoiceURI)}
                       className="p-1 rounded text-emerald-400 hover:bg-zinc-800 transition-colors"
                       title="Ascolta in Italiano"
                     >

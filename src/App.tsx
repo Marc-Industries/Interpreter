@@ -4,12 +4,13 @@ import { TranslationView } from './components/TranslationView';
 import { SettingsModal } from './components/SettingsModal';
 import { HistoryDrawer } from './components/HistoryDrawer';
 import { InstallPrompt } from './components/InstallPrompt';
+import { MicPermissionModal } from './components/MicPermissionModal';
 import { AudioDevice, AudioSettings, TranslationItem, TranslationState } from './types';
 import {
   getAudioInputDevices,
   enableBackgroundStandbyProtection,
   disableBackgroundStandbyProtection,
-  speakItalianText,
+  speakTargetText,
   primeSpeechSynthesis,
   stopSpeechSynthesis,
   blobToBase64,
@@ -27,32 +28,54 @@ export default function App() {
   // App State
   const [isListening, setIsListening] = useState(false);
   const [state, setState] = useState<TranslationState>('idle');
-  const [polishText, setPolishText] = useState('');
-  const [interimPolishText, setInterimPolishText] = useState('');
-  const [italianText, setItalianText] = useState('');
+  const [sourceText, setSourceText] = useState('');
+  const [interimSourceText, setInterimSourceText] = useState('');
+  const [targetText, setTargetText] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
 
   // Settings & Devices
   const [devices, setDevices] = useState<AudioDevice[]>([]);
-  const [settings, setSettings] = useState<AudioSettings>({
-    selectedDeviceId: '',
-    echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
-    enableAutoTts: true,
-    ttsRate: 1.0,
-    ttsPitch: 0.95,
-    selectedVoiceURI: '',
-    geminiVoiceName: 'Aoede',
-    useGeminiTts: false,
-    translationEngine: 'gemini-flash',
+  
+  const [settings, setSettings] = useState<AudioSettings>(() => {
+    const saved = localStorage.getItem('appSettings');
+    const defaultSettings: AudioSettings = {
+      apiKey: '',
+      sourceLang: { name: 'Polacco', code: 'pl-PL' },
+      targetLang: { name: 'Italiano', code: 'it-IT' },
+      selectedDeviceId: '',
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      enableAutoTts: true,
+      ttsRate: 1.0,
+      ttsPitch: 0.95,
+      selectedVoiceURI: '',
+    };
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        // Migrations from older string format or undefined
+        if (!parsed.sourceLang || typeof parsed.sourceLang !== 'object') parsed.sourceLang = defaultSettings.sourceLang;
+        if (!parsed.targetLang || typeof parsed.targetLang !== 'object') parsed.targetLang = defaultSettings.targetLang;
+        return { ...defaultSettings, ...parsed };
+      } catch (e) {
+        return defaultSettings;
+      }
+    }
+    return defaultSettings;
   });
+
+  // Save settings to localStorage when they change
+  useEffect(() => {
+    localStorage.setItem('appSettings', JSON.stringify(settings));
+  }, [settings]);
 
   // Modals
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isMicModalOpen, setIsMicModalOpen] = useState(false);
 
   // History Log
   const [history, setHistory] = useState<TranslationItem[]>([]);
@@ -67,6 +90,40 @@ export default function App() {
   const lastProcessedTextRef = useRef<string>('');
   const isTranslatingRef = useRef<boolean>(false);
   const isListeningRef = useRef<boolean>(false);
+  useEffect(() => {
+    isListeningRef.current = isListening;
+  }, [isListening]);
+  const accumulatedSourceRef = useRef<string>('');
+  const audioQueueRef = useRef<{ audio: HTMLAudioElement; onEnd: () => void }[]>([]);
+  const isPlayingAudioRef = useRef<boolean>(false);
+
+  const enqueueGeminiAudio = useCallback((audio: HTMLAudioElement, onEnd: () => void) => {
+    const playNext = () => {
+      if (audioQueueRef.current.length === 0) {
+        isPlayingAudioRef.current = false;
+        return;
+      }
+      isPlayingAudioRef.current = true;
+      const current = audioQueueRef.current.shift()!;
+      
+      const handleDone = () => {
+        current.onEnd();
+        playNext();
+      };
+
+      current.audio.onended = handleDone;
+      current.audio.onerror = handleDone;
+      current.audio.play().catch((e) => {
+        console.warn('Errore riproduzione audio queue:', e);
+        handleDone();
+      });
+    };
+
+    audioQueueRef.current.push({ audio, onEnd });
+    if (!isPlayingAudioRef.current) {
+      playNext();
+    }
+  }, []);
 
   // Refresh audio devices list
   const refreshDevices = useCallback(async () => {
@@ -85,6 +142,29 @@ export default function App() {
     refreshDevices();
   }, [refreshDevices]);
 
+  // Request Microphone Permission directly
+  const requestMicrophonePermission = useCallback(async (): Promise<boolean> => {
+    try {
+      const constraints: MediaStreamConstraints = {
+        audio: {
+          echoCancellation: settings.echoCancellation,
+          noiseSuppression: settings.noiseSuppression,
+          autoGainControl: settings.autoGainControl,
+          ...(settings.selectedDeviceId ? { deviceId: { exact: settings.selectedDeviceId } } : {}),
+        },
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      stream.getTracks().forEach((t) => t.stop());
+      setErrorMsg(null);
+      setIsMicModalOpen(false);
+      refreshDevices();
+      return true;
+    } catch (err: any) {
+      console.warn('Richiesta permesso microfono fallita:', err);
+      return false;
+    }
+  }, [refreshDevices, settings]);
+
   // Find active selected device object
   const activeDevice = devices.find((d) => d.deviceId === settings.selectedDeviceId) || null;
 
@@ -94,7 +174,7 @@ export default function App() {
       const trimmed = textToTranslate.trim();
       if (!trimmed) return;
 
-      // Avoid repeating exact same translation in rapid succession if already speaking
+      // Avoid repeating exact same translation in rapid succession
       if (trimmed === lastProcessedTextRef.current && isTranslatingRef.current) return;
 
       isTranslatingRef.current = true;
@@ -102,15 +182,24 @@ export default function App() {
       setState('processing');
       setErrorMsg(null);
 
+      // Immediately clear Polish input state to prevent phrase accumulation loops
+      setSourceText(trimmed);
+      setInterimSourceText('');
+
       try {
         const recentHistoryTexts = history.slice(-3).map((h) => `${h.originalText} => ${h.translatedText}`);
 
         const response = await fetch('/api/translate', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            ...(settings.apiKey ? { 'x-gemini-api-key': settings.apiKey } : {})
+          },
           body: JSON.stringify({
             text: trimmed,
             contextHistory: recentHistoryTexts,
+            sourceLang: settings.sourceLang?.name || 'Polacco',
+            targetLang: settings.targetLang?.name || 'Italiano',
           }),
         });
 
@@ -121,7 +210,10 @@ export default function App() {
         }
 
         const translation = data.translation || '';
-        setItalianText(translation);
+        setTargetText(translation);
+
+        // Clear Polish text after translation is received
+        setSourceText('');
 
         // Add to history
         const newItem: TranslationItem = {
@@ -134,50 +226,42 @@ export default function App() {
 
         setHistory((prev) => [newItem, ...prev]);
 
-        // Trigger Auto TTS if enabled
-        if (settings.enableAutoTts && translation) {
-          setState('speaking');
+      // Helper to isolate mic during TTS playback to prevent audio loopback
+      const setMicTrackState = (enabled: boolean) => {
+        if (streamRef.current) {
+          streamRef.current.getAudioTracks().forEach((track) => {
+            track.enabled = enabled;
+          });
+        }
+      };
 
-          if (settings.useGeminiTts) {
-            // Gemini TTS API
-            try {
-              const ttsRes = await fetch('/api/tts', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  text: translation,
-                  voiceName: settings.geminiVoiceName || 'Aoede'
-                }),
-              });
-              const ttsData = await ttsRes.json();
-              if (ttsData.success && ttsData.audioBase64) {
-                const audio = new Audio(`data:audio/wav;base64,${ttsData.audioBase64}`);
-                audio.playbackRate = settings.ttsRate;
-                audio.onended = () => {
-                  if (isListeningRef.current) setState('listening');
-                  else setState('idle');
-                };
-                audio.play();
-                return;
-              }
-            } catch (err) {
-              console.warn('Fallback a WebSpeech locale:', err);
-            }
-          }
+      // Trigger Auto TTS immediately
+      if (settings.enableAutoTts && translation) {
+        setState('speaking');
+        setMicTrackState(false); // Temporarily mute mic while app is speaking
 
-          // Default WebSpeech
-          speakItalianText(
-            translation,
-            settings.ttsRate,
-            settings.ttsPitch,
-            settings.selectedVoiceURI,
-            () => setState('speaking'),
-            () => {
-              if (isListeningRef.current) setState('listening');
-              else setState('idle');
-            }
-          );
-        } else {
+        const clearItalianAfterSpeech = () => {
+          setMicTrackState(!isMuted); // Re-enable mic when speech finishes
+          setTargetText('');
+          if (isListeningRef.current) setState('listening');
+          else setState('idle');
+        };
+
+        // Default WebSpeech - Instantaneous
+        speakTargetText(
+          translation,
+          settings.ttsRate,
+          settings.ttsPitch,
+          settings.targetLang?.code || 'it-IT',
+          settings.selectedVoiceURI,
+          () => setState('speaking'),
+          clearItalianAfterSpeech
+        );
+      } else {
+          // Clear Italian text after 2.5s if auto-tts is off
+          setTimeout(() => {
+            setTargetText('');
+          }, 2500);
           setState(isListeningRef.current ? 'listening' : 'idle');
         }
       } catch (err: any) {
@@ -185,7 +269,6 @@ export default function App() {
         const errMsg = err.message || 'Errore di traduzione';
         setErrorMsg(errMsg);
         setState('error');
-        // Auto-clear transient error banner and resume listening state after 4 seconds
         setTimeout(() => {
           if (isListeningRef.current) {
             setState('listening');
@@ -198,7 +281,7 @@ export default function App() {
         isTranslatingRef.current = false;
       }
     },
-    [history, settings.enableAutoTts, settings.ttsRate, settings.ttsPitch, settings.selectedVoiceURI, settings.geminiVoiceName, settings.useGeminiTts]
+    [history, settings.enableAutoTts, settings.ttsRate, settings.ttsPitch, settings.selectedVoiceURI, settings.apiKey, settings.sourceLang, settings.targetLang, isMuted]
   );
 
   // Audio Visualizer setup
@@ -258,7 +341,7 @@ export default function App() {
         }
 
         const recognition = new SpeechRecognitionClass();
-        recognition.lang = 'pl-PL';
+        recognition.lang = settings.sourceLang?.code || 'pl-PL';
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.maxAlternatives = 1;
@@ -269,43 +352,44 @@ export default function App() {
 
           for (let i = event.resultIndex; i < event.results.length; ++i) {
             if (event.results[i].isFinal) {
-              finalTranscript += event.results[i][0].transcript;
+              finalTranscript += ' ' + event.results[i][0].transcript;
             } else {
-              interimTranscript += event.results[i][0].transcript;
+              interimTranscript += ' ' + event.results[i][0].transcript;
             }
           }
 
-          if (finalTranscript) {
-            setPolishText((prev) => {
-              const updated = prev ? `${prev} ${finalTranscript}`.trim() : finalTranscript.trim();
-              clearTimeout(translateDebounceTimerRef.current);
-              translateDebounceTimerRef.current = setTimeout(() => {
-                handleTranslateText(updated);
-              }, 300);
-              return updated;
-            });
-            setInterimPolishText('');
-          } else if (interimTranscript) {
-            setInterimPolishText(interimTranscript);
-            // Auto-translate on pause in interim speech
+          if (finalTranscript.trim()) {
+            accumulatedSourceRef.current = (accumulatedSourceRef.current + ' ' + finalTranscript.trim()).trim();
+            setSourceText(accumulatedSourceRef.current);
+            setInterimSourceText('');
+
+            // Wait for a natural pause in speech (900ms) to ensure full sentences are translated together
             clearTimeout(translateDebounceTimerRef.current);
             translateDebounceTimerRef.current = setTimeout(() => {
-              setPolishText((prev) => {
-                const combined = prev ? `${prev} ${interimTranscript}`.trim() : interimTranscript.trim();
-                if (combined) {
-                  handleTranslateText(combined);
-                }
-                return combined;
-              });
-              setInterimPolishText('');
-            }, 1000);
+              const fullText = accumulatedSourceRef.current.trim();
+              if (fullText) {
+                accumulatedSourceRef.current = '';
+                handleTranslateText(fullText);
+              }
+            }, 900);
+          } else if (interimTranscript.trim()) {
+            setInterimSourceText(interimTranscript.trim());
+            clearTimeout(translateDebounceTimerRef.current);
+            translateDebounceTimerRef.current = setTimeout(() => {
+              const fullText = accumulatedSourceRef.current.trim();
+              if (fullText) {
+                accumulatedSourceRef.current = '';
+                handleTranslateText(fullText);
+              }
+            }, 1200);
           }
         };
 
         recognition.onerror = (event: any) => {
           console.warn('SpeechRecognition warning:', event.error);
-          if (event.error === 'not-allowed') {
-            setErrorMsg('Permesso microfono negato nel browser.');
+          if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+            setErrorMsg('Permesso microfono negato dal browser o piattaforma.');
+            setIsMicModalOpen(true);
             isListeningRef.current = false;
             setIsListening(false);
             setState('idle');
@@ -338,17 +422,22 @@ export default function App() {
             try {
               const res = await fetch('/api/translate', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                  'Content-Type': 'application/json',
+                  ...(settings.apiKey ? { 'x-gemini-api-key': settings.apiKey } : {})
+                },
                 body: JSON.stringify({
                   audioBase64: base64,
                   mimeType: 'audio/webm;codecs=opus',
+                  sourceLang: settings.sourceLang?.name || 'Polacco',
+                  targetLang: settings.targetLang?.name || 'Italiano',
                 }),
               });
               const data = await res.json();
               if (data.success && data.translation) {
-                setItalianText(data.translation);
+                setTargetText(data.translation);
                 if (settings.enableAutoTts) {
-                  speakItalianText(data.translation, settings.ttsRate, settings.ttsPitch, settings.selectedVoiceURI);
+                  speakTargetText(data.translation, settings.ttsRate, settings.ttsPitch, settings.targetLang?.code || 'it-IT', settings.selectedVoiceURI);
                 }
               }
             } catch (err) {
@@ -361,9 +450,21 @@ export default function App() {
 
         recorder.start(4000);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Impossibile accedere al microfono:', err);
-      setErrorMsg('Impossibile accedere al microfono. Verifica i permessi del browser.');
+      const isDenied =
+        err?.name === 'NotAllowedError' ||
+        err?.name === 'PermissionDeniedError' ||
+        err?.message?.toLowerCase().includes('not allowed') ||
+        err?.message?.toLowerCase().includes('denied') ||
+        err?.message?.toLowerCase().includes('permission');
+
+      if (isDenied) {
+        setErrorMsg('Impossibile accedere al microfono: Permesso non consentito dal browser o dall\'iframe.');
+        setIsMicModalOpen(true);
+      } else {
+        setErrorMsg('Impossibile accedere al microfono. Verifica le impostazioni del dispositivo.');
+      }
       isListeningRef.current = false;
       setIsListening(false);
       setState('idle');
@@ -420,17 +521,17 @@ export default function App() {
 
   // Clear display texts
   const handleClearTexts = () => {
-    setPolishText('');
-    setInterimPolishText('');
-    setItalianText('');
+    setSourceText('');
+    setInterimSourceText('');
+    setTargetText('');
     lastProcessedTextRef.current = '';
     setErrorMsg(null);
   };
 
   // Re-play last Italian speech
   const handleRepeatItalianSpeech = () => {
-    if (italianText) {
-      speakItalianText(italianText, settings.ttsRate, settings.ttsPitch, settings.selectedVoiceURI);
+    if (targetText) {
+      speakTargetText(targetText, settings.ttsRate, settings.ttsPitch, settings.selectedVoiceURI);
     }
   };
 
@@ -458,20 +559,30 @@ export default function App() {
         <TranslationView
           isListening={isListening}
           state={state}
-          polishText={polishText}
-          interimPolishText={interimPolishText}
-          italianText={italianText}
+          sourceText={sourceText}
+          interimSourceText={interimSourceText}
+          targetText={targetText}
           audioLevel={audioLevel}
           isMuted={isMuted}
           ttsRate={settings.ttsRate}
+          enableAutoTts={settings.enableAutoTts}
+          onToggleAutoTts={() => setSettings((s) => ({ ...s, enableAutoTts: !s.enableAutoTts }))}
           onToggleListening={handleToggleListening}
           onToggleMute={handleToggleMute}
           onClearTexts={handleClearTexts}
           onRepeatItalianSpeech={handleRepeatItalianSpeech}
-          onPolishTextChange={(text) => setPolishText(text)}
+          onSourceTextChange={(text) => setSourceText(text)}
+          onRequestMicPermission={() => setIsMicModalOpen(true)}
           errorMsg={errorMsg}
         />
       </main>
+
+      {/* Microphone Permission Modal */}
+      <MicPermissionModal
+        isOpen={isMicModalOpen}
+        onClose={() => setIsMicModalOpen(false)}
+        onRequestPermission={requestMicrophonePermission}
+      />
 
       {/* Settings Modal */}
       <SettingsModal

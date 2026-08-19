@@ -147,14 +147,15 @@ export function releaseWakeLock() {
 // Speech Synthesis Queue & Playback (Italian output)
 let currentSpeechUtterance: SpeechSynthesisUtterance | null = null;
 
-// Helper to get available Italian voices from the browser
-export function getAvailableItalianVoices(): SpeechSynthesisVoice[] {
+// Helper to get available voices for target language
+export function getAvailableVoices(langCode: string): SpeechSynthesisVoice[] {
   if (!('speechSynthesis' in window)) return [];
   const voices = window.speechSynthesis.getVoices();
-  const italianVoices = voices.filter(v => v.lang.toLowerCase().startsWith('it'));
+  const targetPrefix = langCode.split('-')[0].toLowerCase();
+  const targetVoices = voices.filter(v => v.lang.toLowerCase().startsWith(targetPrefix));
   
   // Sort voices to put higher quality, soft or natural voices at top
-  return italianVoices.sort((a, b) => {
+  return targetVoices.sort((a, b) => {
     const aName = a.name.toLowerCase();
     const bName = b.name.toLowerCase();
     const isSoftA = aName.includes('google') || aName.includes('natural') || aName.includes('alice') || aName.includes('federica') || aName.includes('siri') || aName.includes('premium');
@@ -180,10 +181,13 @@ export function primeSpeechSynthesis() {
   }
 }
 
-export function speakItalianText(
+let speechQueueCount = 0;
+
+export function speakTargetText(
   text: string,
   rate: number = 1.0,
   pitch: number = 0.95,
+  langCode: string = 'it-IT',
   voiceURI?: string,
   onStart?: () => void,
   onEnd?: () => void
@@ -198,67 +202,67 @@ export function speakItalianText(
     window.speechSynthesis.resume();
   }
 
-  // Cancel any currently playing speech safely
-  if (window.speechSynthesis.speaking) {
-    window.speechSynthesis.cancel();
-  }
-
+  // Do NOT cancel active speech! Allow WebSpeech API to queue utterances naturally
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = 'it-IT';
+  utterance.lang = langCode;
   utterance.rate = Math.max(0.7, Math.min(1.3, rate));
   utterance.pitch = Math.max(0.5, Math.min(1.5, pitch));
 
-  // Find preferred Italian voice
-  const italianVoices = getAvailableItalianVoices();
+  // Find preferred voice
+  const targetVoices = getAvailableVoices(langCode);
   let chosenVoice: SpeechSynthesisVoice | undefined;
 
   if (voiceURI) {
-    chosenVoice = italianVoices.find(v => v.voiceURI === voiceURI || v.name === voiceURI);
+    chosenVoice = targetVoices.find(v => v.voiceURI === voiceURI || v.name === voiceURI);
   }
 
-  if (!chosenVoice && italianVoices.length > 0) {
-    // Default to the first (sorted best) Italian voice
-    chosenVoice = italianVoices[0];
+  if (!chosenVoice && targetVoices.length > 0) {
+    chosenVoice = targetVoices[0];
   }
 
   if (!chosenVoice) {
     const allVoices = window.speechSynthesis.getVoices();
-    chosenVoice = allVoices.find(v => v.lang.startsWith('it'));
+    const targetPrefix = langCode.split('-')[0].toLowerCase();
+    chosenVoice = allVoices.find(v => v.lang.toLowerCase().startsWith(targetPrefix));
   }
 
   if (chosenVoice) {
     utterance.voice = chosenVoice;
   }
 
+  speechQueueCount++;
+
   utterance.onstart = () => {
     if (onStart) onStart();
   };
 
-  utterance.onend = () => {
-    currentSpeechUtterance = null;
-    if (onEnd) onEnd();
+  const handleFinish = () => {
+    speechQueueCount = Math.max(0, speechQueueCount - 1);
+    if (speechQueueCount === 0) {
+      currentSpeechUtterance = null;
+      if (onEnd) onEnd();
+    }
   };
+
+  utterance.onend = handleFinish;
 
   utterance.onerror = (e) => {
     console.warn('Errore sintesi vocale:', e);
-    currentSpeechUtterance = null;
-    if (onEnd) onEnd();
+    handleFinish();
   };
 
   currentSpeechUtterance = utterance;
 
-  // Use a slight timeout to prevent Chrome/Android race conditions when calling speak after cancel
-  setTimeout(() => {
-    try {
-      if (window.speechSynthesis.paused) {
-        window.speechSynthesis.resume();
-      }
-      window.speechSynthesis.speak(utterance);
-    } catch (err) {
-      console.warn('Errore riproduzione speak:', err);
-      if (onEnd) onEnd();
+  // Queue utterance seamlessly
+  try {
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
     }
-  }, 50);
+    window.speechSynthesis.speak(utterance);
+  } catch (err) {
+    console.warn('Errore riproduzione speak:', err);
+    handleFinish();
+  }
 }
 
 export function stopSpeechSynthesis() {
